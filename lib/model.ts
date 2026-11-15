@@ -12,6 +12,39 @@
 //
 // Implied value follows only from the snapshot's own figures:
 //
+// The chain multiplier is the fourth factor, and the smallest one on purpose.
+//
+// A protocol live on five chains has five places a launch can land; a protocol live on one
+// chain has one. The snapshot already carries the chain list for every row, so the multiplier
+// costs nothing to compute and needs no outside data. It runs from 1.00 for a single chain to
+// 1.12 for five or more, in steps of 0.03 per extra chain, capped at four extra chains. The
+// cap matters: without it a protocol on twelve chains would outrank a larger protocol on one,
+// and chain count would stop being a tiebreaker and start being the ranking. At 0.03 a step,
+// a two-chain protocol gains three percent over a one-chain protocol of the same size — enough
+// to break a tie, never enough to overturn a real size gap.
+//
+// The farm plan is generated, never hand-written. Each row's eight steps come from the
+// protocol's own record: its category picks the action (lend, dex, bridge, staking, perpetual,
+// prediction, curator, stablecoin, RWA, insurance, or the generic deposit), its TVL picks the
+// capital ($50 under $100M, $100 under $1B, $150 under $5B, $250 above), its age picks the hold
+// (60 days under six months, 45 under a year, 30 above), and its first chain picks the gas
+// figure (Ethereum about $12, Solana about $0.10, an L2 about $0.50). Two protocols in the
+// same category with the same TVL band and the same age band get the same plan; that is the
+// point — the plan is a function of the record, so rebuilding the board from the same snapshot
+// reproduces the same plan, and the gate can check it.
+//
+// The set-aside is not a deletion. The 144 wrapped products and the 402 live-token protocols
+// are kept out of the ranked board, but the dashboard names every wrapped product it sets
+// aside and the reason, and shows the live-token protocols with their market caps as the
+// market's own values. A reader who disagrees with an exclusion can find it, read the reason,
+// and check the snapshot's own fields. An exclusion nobody can see is a hidden judgement; an
+// exclusion with its reason attached is a rule the reader can audit.
+//
+// The board is a pure function of the snapshot and the constants. Same snapshot in, same
+// board out, byte for byte: main.ts runs buildBoard and writes board.json, and two runs from
+// the same input produce identical files. The dossier is built the same way, so the gate's
+// rebuild matches the submitted one exactly.
+//
 //   base       = tvl_usd x BASE_MULTIPLE
 //   growth     = clamp(change_7d, -60, 120) per cent
 //   growthMult = 1 + (growth / 100) x GROWTH_WEIGHT

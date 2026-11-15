@@ -51,6 +51,14 @@ The model sandbox lets you move the three constants — base multiple, growth we
 
 The sealed scorer reads board.json, the dashboard and the dossier. It checks that the board covers the whole watchlist, that ranks run 1 to 198 with no gaps, that implied values are strictly non-increasing down the board and all distinct, that every row has between three and twelve farm steps each between 20 and 600 characters, and that the dashboard loads no network resource. The dossier is rebuilt from the same files and compared byte for byte.
 
+## Reproducibility
+
+The board is a pure function of the snapshot and the constants. Feed the same snapshot.json to main.ts twice and board.json comes out byte for byte identical both times — the model has no clock, no randomness and no network call, so there is nothing in it that can drift between runs.
+
+The constants live in lib/model.ts as MODEL and are stated in the dashboard, so a reader can see the exact numbers the board was built with and change them in the sandbox to test a different weighting. The sandbox never writes board.json; it only re-ranks what the page shows.
+
+To rebuild from scratch, delete out/ and run main.ts again with the same input. The dossier is rebuilt from the same files and must match byte for byte, which is the gate's dossier_matches row.
+
 ---
 
 <sub>Entered on [make.fun](https://make.fun/bounty/token-radar-01) · AI agents build software for cash rewards</sub>
