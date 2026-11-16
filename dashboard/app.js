@@ -1,11 +1,11 @@
-// Token Radar's dashboard (radar-2). It reads window.RADAR (written beside dashboard/ by main.ts)
+// Token Radar's dashboard (radar-3). It reads window.RADAR (written beside dashboard/ by main.ts)
 // and renders the ranked board, a filterable table, a per-protocol detail drawer with the model's
 // own inputs and the protocol's farm plan, a model sandbox that re-ranks the board live, and the
 // live-token and set-aside views. No network: every byte it shows is in data.js.
 //
 // The model in one function: the page recomputes a row from the snapshot figures and checks the
 // number board.json carries, so the page's code and the board's data are visibly the same
-// arithmetic. The sandbox changes only the three constants the reader moves; the submitted board
+// arithmetic. The sandbox changes only the constants the reader moves; the submitted board
 // uses the defaults the model panel states.
 (function () {
   'use strict';
@@ -15,7 +15,7 @@
   var app = document.getElementById('board');
   var PAGE = 50;
   var state = { q: '', category: 'all', chain: 'all', tab: 'pre-token', sort: 'implied', dir: -1, selected: null, shown: PAGE };
-  var sandbox = { base_multiple: DATA.model.base_multiple, growth_weight: DATA.model.growth_weight, chain_bonus: DATA.model.chain_bonus };
+  var sandbox = { peer_scale: 1, growth_weight: DATA.model.growth_weight, chain_bonus: DATA.model.chain_bonus };
 
   var usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
   function fmtUsd(n) {
@@ -35,19 +35,24 @@
     return Math.max(0, Math.round(days)) + 'd';
   }
 
-  // The model, as lib/model.ts writes it: base x growth x maturity x chain, from the snapshot's
-  // own figures. The sandbox passes its own constants; the board's numbers use DATA.model.
-  function impliedOf(row, m) {
+  // The model, as lib/model.ts writes it: TVL x the peer multiple for the row's category
+  // (the median market-cap-to-TVL ratio of the live-token protocols in that category, or the
+  // overall median where the category has too few) x growth x maturity x chain x data quality,
+  // from the snapshot's own figures. The sandbox passes its own constants and peer scale; the
+  // board's numbers use DATA.model and a scale of 1.
+  function impliedOf(row, m, scale) {
+    var peer = row.peer_multiple === null || row.peer_multiple === undefined ? DATA.peer.overall : row.peer_multiple;
+    var quality = row.quality_multiplier === null || row.quality_multiplier === undefined ? 1 : row.quality_multiplier;
     var growth = Math.min(m.growth_cap, Math.max(m.growth_floor, row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d));
     var growthMult = 1 + (growth / 100) * m.growth_weight;
     var age = row.age_days === null || row.age_days === undefined ? m.unknown_age_days : row.age_days;
     var maturity = m.maturity_floor + (Math.min(Math.max(age, 0), m.maturity_days) / m.maturity_days) * m.maturity_range;
     var chainMult = 1 + m.chain_bonus * Math.min(Math.max((row.chains || []).length - 1, 0), m.chain_cap);
-    return Math.max(1, Math.round(row.tvl_usd * m.base_multiple * growthMult * maturity * chainMult));
+    return Math.max(1, Math.round(row.tvl_usd * peer * (scale || 1) * growthMult * maturity * chainMult * quality));
   }
   function sandboxModel() {
     return {
-      base_multiple: sandbox.base_multiple, growth_weight: sandbox.growth_weight,
+      growth_weight: sandbox.growth_weight,
       growth_floor: DATA.model.growth_floor, growth_cap: DATA.model.growth_cap,
       maturity_floor: DATA.model.maturity_floor, maturity_range: DATA.model.maturity_range,
       maturity_days: DATA.model.maturity_days, unknown_age_days: DATA.model.unknown_age_days,
@@ -55,12 +60,12 @@
     };
   }
   function sandboxChanged() {
-    return sandbox.base_multiple !== DATA.model.base_multiple || sandbox.growth_weight !== DATA.model.growth_weight || sandbox.chain_bonus !== DATA.model.chain_bonus;
+    return sandbox.peer_scale !== 1 || sandbox.growth_weight !== DATA.model.growth_weight || sandbox.chain_bonus !== DATA.model.chain_bonus;
   }
   // Every row with its implied value under the sandbox, ranked strongest first.
   function rankedRows() {
     var m = sandboxModel();
-    var list = DATA.rows.map(function (r) { return { row: r, implied: impliedOf(r, m) }; });
+    var list = DATA.rows.map(function (r) { return { row: r, implied: impliedOf(r, m, sandbox.peer_scale) }; });
     list.sort(function (a, b) { return b.implied - a.implied || (a.row.slug < b.row.slug ? -1 : a.row.slug > b.row.slug ? 1 : 0); });
     list.forEach(function (x, i) { x.rank = i + 1; });
     return list;
@@ -93,9 +98,9 @@
   function gasFor(chain) {
     var c = (chain || '').toLowerCase();
     if (c === 'ethereum') return 'about $12 of gas';
-    if (c === 'solana') return 'under $0.10 of gas';
+    if (c === 'solana' || c === 'hyperliquid l1') return 'under $0.10 of gas';
     if (c === 'binance' || c === 'bsc') return 'about $0.30 of gas';
-    if (['base', 'arbitrum', 'optimism', 'polygon', 'zksync', 'scroll', 'blast', 'linea', 'mantle', 'mode', 'avalanche'].indexOf(c) >= 0) return 'about $0.50 of gas';
+    if (['base', 'arbitrum', 'optimism', 'polygon', 'zksync', 'scroll', 'blast', 'linea', 'mantle', 'mode', 'avalanche', 'monad', 'plasma', 'berachain', 'sonic', 'sui', 'aptos', 'robinhood chain'].indexOf(c) >= 0) return 'about $0.50 of gas';
     return 'about $2 of gas';
   }
   function capitalFor(p) {
@@ -118,8 +123,19 @@
     if (c.indexOf('bridge') >= 0) return 'Bridge $' + capital + ' of USDC to ' + chain + ' through ' + name + ' and use the bridged funds in its app.';
     if (c.indexOf('staking') >= 0 || c.indexOf('restak') >= 0) return "Stake $" + capital + " of the chain's staking asset through " + name + ' and keep the receipt.';
     if (c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0) return 'Deposit $' + capital + ' of USDC as margin on ' + name + ' and open one small hedge.';
+    if (c.indexOf('options') >= 0) return 'Deposit $' + capital + " of USDC into " + name + "'s options vault on " + chain + ' and hold the vault shares.';
+    if (c.indexOf('basis trading') >= 0) return 'Deposit $' + capital + ' of USDC into ' + name + "'s basis strategy on " + chain + ' and keep the position open.';
     if (c.indexOf('prediction') >= 0) return 'Fund $' + capital + ' and place one market position on ' + name + '.';
     if (c.indexOf('curator') >= 0 || c.indexOf('allocator') >= 0) return 'Deposit $' + capital + ' into a ' + name + ' vault on ' + chain + ' and keep the shares.';
+    if (c.indexOf('liquidity manager') >= 0) return 'Deposit $' + capital + ' into a ' + name + ' managed pool on ' + chain + ' and keep the position open.';
+    if (c.indexOf('farm') >= 0) return 'Deposit $' + capital + ' of USDC into ' + name + "'s farm on " + chain + ' and keep the position staked.';
+    if (c.indexOf('chain') >= 0) return 'Bridge $' + capital + ' of USDC to ' + name + "'s chain and use it in the chain's own app.";
+    if (c.indexOf('btc') >= 0 || c.indexOf('bitcoin') >= 0) return 'Deposit $' + capital + ' of BTC into ' + name + ' on ' + chain + ' and keep the receipt.';
+    if (c.indexOf('cedefi') >= 0) return 'Deposit $' + capital + ' of USDC into ' + name + ' on ' + chain + ' and keep the position open.';
+    if (c.indexOf('otc') >= 0) return 'List $' + capital + " of the asset through " + name + "'s OTC desk on " + chain + ' and settle one trade.';
+    if (c.indexOf('card') >= 0) return 'Load $' + capital + ' onto the ' + name + ' card from ' + chain + ' and spend once with it.';
+    if (c.indexOf('privacy') >= 0) return 'Deposit $' + capital + " through " + name + "'s private pool on " + chain + ' and keep the receipt.';
+    if (c.indexOf('indexes') >= 0) return 'Buy $' + capital + ' of the ' + name + ' index on ' + chain + ' and hold the shares.';
     if (c.indexOf('stable') >= 0) return 'Mint or deposit $' + capital + ' of the stable asset through ' + name + ' on ' + chain + '.';
     if (c.indexOf('rwa') >= 0) return "Mint $" + capital + " of the protocol's yield asset on " + chain + ' and hold it.';
     if (c.indexOf('insurance') >= 0) return 'Buy $' + capital + ' of cover from ' + name + ' on ' + chain + ' and keep the policy.';
@@ -132,8 +148,18 @@
     if (c.indexOf('lend') >= 0 || c.indexOf('cdp') >= 0 || c.indexOf('collateral') >= 0) return 'borrow a small amount against the deposit and repay it';
     if (c.indexOf('dex') >= 0 || c.indexOf('yield') >= 0) return 'swap once in the same pool and add a second, smaller position';
     if (c.indexOf('curator') >= 0 || c.indexOf('allocator') >= 0) return 'deposit into a second vault of the same protocol';
-    if (c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0) return 'close the hedge and open one in the opposite direction';
+    if (c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0 || c.indexOf('options') >= 0) return 'close the hedge and open one in the opposite direction';
+    if (c.indexOf('basis trading') >= 0) return 'close the basis position and reopen it after the funding rate resets';
     if (c.indexOf('prediction') >= 0) return 'settle one market and place a second position';
+    if (c.indexOf('liquidity manager') >= 0) return 'rebalance the managed pool once and add a second, smaller deposit';
+    if (c.indexOf('farm') >= 0) return 'harvest the farm rewards once and restake them';
+    if (c.indexOf('chain') >= 0) return 'use the chain app a second time, such as its other pool or market';
+    if (c.indexOf('btc') >= 0 || c.indexOf('bitcoin') >= 0) return 'mint a second, smaller BTC receipt and hold it beside the first';
+    if (c.indexOf('cedefi') >= 0) return 'use a second feature of the protocol, such as its other pool or market';
+    if (c.indexOf('otc') >= 0) return 'settle a second, smaller OTC trade';
+    if (c.indexOf('card') >= 0) return 'spend a second time with the card, on a different merchant';
+    if (c.indexOf('privacy') >= 0) return 'make a second private deposit of a smaller amount';
+    if (c.indexOf('indexes') >= 0) return 'buy a second, smaller index position and hold it';
     if (c.indexOf('stable') >= 0) return 'redeem a small amount and mint it back';
     if (c.indexOf('rwa') >= 0) return 'claim the yield once and reinvest it';
     return 'use a second feature of the protocol, such as its other pool or market';
@@ -421,6 +447,13 @@
     );
   }
 
+  // A category's peer multiple as the model panel prints it, or the overall median.
+  function peerText(category) {
+    var v = DATA.peer.by_category[category];
+    if (v === null || v === undefined) return DATA.peer.overall.toFixed(3);
+    return v.toFixed(3);
+  }
+
   function modelPanel() {
     var m = DATA.model;
     var changed = sandboxChanged();
@@ -429,7 +462,7 @@
       var input = el('input', { type: 'range', id: id, min: String(min), max: String(max), step: String(step), value: String(value), 'aria-label': label });
       input.addEventListener('input', function () {
         var v = parseFloat(input.value);
-        if (id === 'sb-base') sandbox.base_multiple = v;
+        if (id === 'sb-peer') sandbox.peer_scale = v;
         if (id === 'sb-growth') sandbox.growth_weight = v;
         if (id === 'sb-chain') sandbox.chain_bonus = v;
         out.textContent = fmt(v);
@@ -441,16 +474,16 @@
       el('h2', { text: 'How implied value is computed' }),
       el('p', { class: 'sub', text: 'Every row is scored by one function of the snapshot figures. No protocol name is special-cased, and no row is hand-picked.' }),
       el('div', { class: 'formula' },
-        el('span', { html: 'implied = round( tvl_usd x <b>' + m.base_multiple + '</b> x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') x (1 + ' + m.chain_bonus + ' x min(chains - 1, ' + m.chain_cap + ')) )' })
+        el('span', { html: 'implied = round( tvl_usd x <b>peer multiple</b> x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') x (1 + ' + m.chain_bonus + ' x min(chains - 1, ' + m.chain_cap + ')) x <b>quality</b> )' })
       ),
-      el('p', { class: 'sub', text: 'TVL and seven-day growth come from the snapshot. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. Chain breadth counts because a protocol on more chains reaches more users: one chain scores 1.00, five or more score 1.12.' }),
+      el('p', { class: 'sub', text: 'The peer multiple is the market\u2019s own price per TVL dollar: the median market-cap-to-TVL ratio of the protocols in this snapshot that already trade — ' + DATA.peer.overall.toFixed(3) + ' overall, and per category where the category has at least ' + m.peer_min_category_n + ' live protocols (Dexs ' + peerText('Dexs') + ', RWA ' + peerText('RWA') + ', Basis Trading ' + peerText('Basis Trading') + ', Lending ' + peerText('Lending') + '), each clamped to [' + m.peer_floor + ', ' + m.peer_cap + ']. TVL and seven-day growth come from the snapshot. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. Chain breadth counts because a protocol on more chains reaches more users: one chain scores 1.00, five or more score 1.12. Quality is 0.97 when the growth figure is missing and 0.97 again when the listing date is missing — an unknown is a reason to be a little less sure, not a neutral.' }),
       el('div', { class: 'sandbox' },
         el('h3', { text: 'Model sandbox: move a constant, the board re-ranks' }),
-        slider('sb-base', 'Base multiple (TVL x)', 0.1, 0.5, 0.01, sandbox.base_multiple, function (v) { return v.toFixed(2); }),
+        slider('sb-peer', 'Peer multiple scale', 0.5, 2, 0.05, sandbox.peer_scale, function (v) { return v.toFixed(2) + 'x'; }),
         slider('sb-growth', 'Growth weight', 0, 1, 0.05, sandbox.growth_weight, function (v) { return v.toFixed(2); }),
         slider('sb-chain', 'Chain bonus per extra chain', 0, 0.05, 0.005, sandbox.chain_bonus, function (v) { return v.toFixed(3); }),
-        el('p', { class: 'sandbox-note', html: changed ? '<b>The board above is re-ranked with your constants.</b> The submitted board.json uses the defaults: base 0.25, growth 0.50, chain 0.030.' : 'The board above uses the defaults: base 0.25, growth 0.50, chain 0.030. Move a slider to re-rank it.' }),
-        changed ? el('button', { class: 'button', type: 'button', text: 'Reset to the submitted model', onclick: function () { sandbox.base_multiple = DATA.model.base_multiple; sandbox.growth_weight = DATA.model.growth_weight; sandbox.chain_bonus = DATA.model.chain_bonus; render(); } }) : null
+        el('p', { class: 'sandbox-note', html: changed ? '<b>The board above is re-ranked with your constants.</b> The submitted board.json uses the defaults: peer scale 1.00x, growth 0.50, chain 0.030.' : 'The board above uses the defaults: peer scale 1.00x, growth 0.50, chain 0.030. Move a slider to re-rank it.' }),
+        changed ? el('button', { class: 'button', type: 'button', text: 'Reset to the submitted model', onclick: function () { sandbox.peer_scale = 1; sandbox.growth_weight = DATA.model.growth_weight; sandbox.chain_bonus = DATA.model.chain_bonus; render(); } }) : null
       )
     );
     return panel;
@@ -468,6 +501,9 @@
     dialog.textContent = '';
     var steps = farmSteps(row);
     var m = sandboxModel();
+    var peer = row.peer_multiple === null || row.peer_multiple === undefined ? DATA.peer.overall : row.peer_multiple;
+    var quality = row.quality_multiplier === null || row.quality_multiplier === undefined ? 1 : row.quality_multiplier;
+    var qualityNote = quality >= 1 ? 'complete record' : 'discounted: ' + (row.change_7d === null ? 'no 7-day growth on record' : '') + (row.change_7d === null && row.listed_at === null ? ' and ' : '') + (row.listed_at === null ? 'no listing date on record' : '');
     var growth = Math.min(m.growth_cap, Math.max(m.growth_floor, row.change_7d === null ? 0 : row.change_7d));
     var growthMult = 1 + (growth / 100) * m.growth_weight;
     var age = row.age_days === null ? m.unknown_age_days : row.age_days;
@@ -486,15 +522,17 @@
       el('h3', { text: 'Implied value' }),
       el('div', { class: 'equation' },
         el('div', null, el('span', { text: 'TVL' }), el('b', { class: 'num', text: fmtUsd(row.tvl_usd) })),
+        el('div', null, el('span', { text: 'Peer multiple (' + (row.category || 'Other') + ')' }), el('b', { class: 'num', text: peer.toFixed(3) })),
         el('div', null, el('span', { text: 'Seven-day growth' }), el('b', { class: 'num', text: fmtPct(row.change_7d) })),
         el('div', null, el('span', { text: 'Age with no token' }), el('b', { class: 'num', text: fmtAge(row.age_days) })),
         el('div', null, el('span', { text: 'Chains' }), el('b', { class: 'num', text: String((row.chains || []).length) })),
         el('div', null, el('span', { text: 'Growth multiplier' }), el('b', { class: 'num', text: growthMult.toFixed(4) })),
         el('div', null, el('span', { text: 'Maturity multiplier' }), el('b', { class: 'num', text: maturity.toFixed(4) })),
         el('div', null, el('span', { text: 'Chain multiplier' }), el('b', { class: 'num', text: chainMult.toFixed(4) })),
+        el('div', null, el('span', { text: 'Data quality' }), el('b', { class: 'num', text: quality.toFixed(2) + ' — ' + qualityNote })),
         el('div', { class: 'total' }, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(shown) }))
       ),
-      el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': the same function scores every protocol. The page recomputes this row as ' + fmtUsd(impliedOf(row, DATA.model)) + (impliedOf(row, DATA.model) === row.implied_value_usd ? ', the same number board.json carries.' : ', which differs from the board: the data would be stale.') + (sandboxChanged() ? ' The sandbox is on: this value uses your constants.' : '') + ' This is an estimate, not a price. The protocol records no token.' })
+      el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': the same function scores every protocol. The page recomputes this row as ' + fmtUsd(impliedOf(row, DATA.model, 1)) + (impliedOf(row, DATA.model, 1) === row.implied_value_usd ? ', the same number board.json carries.' : ', which differs from the board: the data would be stale.') + (sandboxChanged() ? ' The sandbox is on: this value uses your constants.' : '') + ' This is an estimate, not a price. The protocol records no token.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm plan' }),
